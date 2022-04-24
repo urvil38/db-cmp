@@ -66,32 +66,37 @@ func (vmc *Client) Series(ctx context.Context, query map[string]string) ([]byte,
 }
 
 func (vmc *Client) series(ctx context.Context, path string, query map[string]string) ([]byte, error) {
-	u, err := url.Parse(vmc.vmendpoint + path)
-	if err != nil {
-		return nil, fmt.Errorf("unable to parse vm URL: %v", err)
-	}
+	// u, err := url.Parse(vmc.vmendpoint + path)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("unable to parse vm URL: %v", err)
+	// }
 
-	q := u.Query()
-	for k, v := range query {
-		q.Set(k, v)
-	}
-	u.RawQuery = q.Encode()
+	// q := u.Query()
+	// for k, v := range query {
+	// 	q.Set(k, v)
+	// }
+	// u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(nil))
+	// req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(nil))
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+
+	// res, err := vmc.do(req)
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// if res.Status == "error" {
+	// 	return nil, fmt.Errorf("vmclient: receive error from server: %v ,error type: %v", res.Err, res.ErrType)
+	// }
+	// return res.Data, nil
+	res, err := ioutil.ReadFile("/home/last9/series-final.json")
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-
-	res, err := vmc.do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	if res.Status == "error" {
-		return nil, fmt.Errorf("vmclient: receive error from server: %v ,error type: %v", res.Err, res.ErrType)
-	}
-	return res.Data, nil
+	return res, nil
 }
 
 func (vmc *Client) doQuery(ctx context.Context, path string, query map[string]string) ([]byte, error) {

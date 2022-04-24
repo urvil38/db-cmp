@@ -5,7 +5,6 @@ go 1.18
 require (
 	github.com/cespare/xxhash/v2 v2.1.2
 	github.com/lib/pq v1.10.5
-	github.com/siddontang/go v0.0.0-20180604090527-bdc77568d726
 	go.mongodb.org/mongo-driver v1.9.0
 )
 
@@ -21,5 +20,4 @@ require (
 	golang.org/x/crypto v0.0.0-20201216223049-8b5274cf687f // indirect
 	golang.org/x/sync v0.0.0-20190911185100-cd5d95a43a6e // indirect
 	golang.org/x/text v0.3.5 // indirect
-	gopkg.in/mgo.v2 v2.0.0-20190816093944-a6b53ec6cb22 // indirect
 )

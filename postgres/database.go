@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"math"
 	"strings"
 
 	"errors"
@@ -81,13 +80,9 @@ func BulkUpsert(ctx context.Context, db *sql.DB, table string, columns []string,
 }
 
 func BulkInsert(ctx context.Context, db *sql.DB, table string, columns []string, values []interface{}, conflictAction string) (err error) {
-	nCols := len(columns)
-	pageSize := batchSize
-	if batchSize > nCols {
-		pageSize = int(math.Floor(float64(batchSize) / float64(nCols)))
-	}
+	pageSize := (batchSize / len(columns)) * len(columns)
 	total := len(values)
-	offset := pageSize*nCols
+	offset := pageSize
 
 	for left := 0; left < total; left += offset {
 		right := left + offset
@@ -103,7 +98,6 @@ func bulkInsert(ctx context.Context, db *sql.DB, table string, columns, returnin
 	if remainder := len(values) % len(columns); remainder != 0 {
 		return fmt.Errorf("modulus of len(values) and len(columns) must be 0: got %d", remainder)
 	}
-
 	// Postgres supports up to 65535 parameters, but stop well before that
 	// so we don't construct humongous queries.
 	const maxParameters = 1000

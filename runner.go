@@ -15,10 +15,10 @@ import (
 	"time"
 
 	"github.com/cespare/xxhash/v2"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"gopkg.in/mgo.v2/bson"
 )
 
 type Series []map[string]string
@@ -74,9 +74,10 @@ func CardinalityHash(labels []Label) string {
 }
 
 type Worker struct {
-	doneCh   chan struct{}
-	workCh   chan string
-	dbWorkCh chan string
+	doneCh      chan struct{}
+	workCh      chan string
+	pgWorkCh    chan string
+	mongoWorkCh chan string
 
 	mu       sync.RWMutex
 	work     map[string]Series
@@ -89,28 +90,26 @@ func NewWorker(vmaddr string) (*Worker, error) {
 		return nil, err
 	}
 	return &Worker{
-		doneCh:   make(chan struct{}),
-		workCh:   make(chan string),
-		mu:       sync.RWMutex{},
-		work:     make(map[string]Series),
-		vmclient: vmc,
+		doneCh:      make(chan struct{}),
+		workCh:      make(chan string),
+		pgWorkCh:    make(chan string),
+		mongoWorkCh: make(chan string),
+		mu:          sync.RWMutex{},
+		work:        make(map[string]Series),
+		vmclient:    vmc,
 	}, nil
 }
 
 func (w *Worker) Start(n int) {
-	tenants := []string{"last9"}
 	for i := 1; i <= n; i++ {
 		go w.Do(i)
-	}
-	for _, t := range tenants {
-		w.workCh <- t
 	}
 }
 
 func (w *Worker) Do(id int) {
-	fmt.Println("starting %v worker", id)
+	fmt.Println("starting worker: ", id)
 	for t := range w.workCh {
-
+		start := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		queryParams := map[string]string{
@@ -129,9 +128,12 @@ func (w *Worker) Do(id int) {
 			return
 		}
 		w.mu.Lock()
-		defer w.mu.Unlock()
 		w.work[t] = s
-		w.dbWorkCh <- t
+		w.mu.Unlock()
+		w.mongoWorkCh <- t
+		//w.pgWorkCh <- t
+		res = nil
+		fmt.Println("took: ", time.Since(start))
 	}
 }
 
@@ -141,13 +143,13 @@ type PostgresWorker struct {
 }
 
 func (pw *PostgresWorker) Start(n int) {
-	for i :=  1 ; i <= n ; i++ {
+	for i := 1; i <= n; i++ {
 		go pw.Do(i)
 	}
 }
 
 func (mw *MongoWorker) Start(n int) {
-	for i :=  1 ; i <= n ; i++ {
+	for i := 1; i <= n; i++ {
 		go mw.Do(i)
 	}
 }
@@ -181,107 +183,129 @@ func NewMongoWorker(dbURL string, w *Worker) (*MongoWorker, error) {
 }
 
 func (pw *PostgresWorker) Do(id int) {
-	fmt.Println("starting pg worker %v", id)
-	for t := range pw.workCh {
-		var values []interface{}
+	fmt.Println("starting pg worker ", id)
+	for t := range pw.pgWorkCh {
+		fmt.Println("pg ", t)
 
 		pw.mu.RLock()
-		defer pw.mu.RUnlock()
 		s, ok := pw.work[t]
 		if !ok {
+			pw.mu.RUnlock()
 			continue
 		}
+		pw.mu.RUnlock()
+
+		values := make([]interface{}, len(s)*5)
+		var i int
 		for _, series := range s {
 			var rec LabelRecord
-			tenant, ok := series["__tenant__"]
+			_, ok := series["__tenant__"]
 			if !ok {
 				continue
 			}
+
+			labels := make(map[string]string)
 			for k, v := range series {
 				rec.labels = append(rec.labels, Label{
 					Name:  k,
 					Value: v,
 				})
+				if k == "__tenant__" || k == "__l9lake__" {
+					continue
+				}
+				labels[k] = v
 			}
-			rec.tenant = tenant
+			rec.tenant = t
 			rec.hash = CardinalityHash(rec.labels)
-			delete(series, "__tenant__")
-			delete(series, "le")
-			delete(series, "__l9lake__")
-			b, err := json.Marshal(series)
-			if err != nil {
-				continue
-			}
-
-			values = append(values, rec.tenant, b, rec.hash, time.Now().Unix(), time.Now().Unix())
+			b, _ := json.Marshal(labels)
+			values[i] = rec.tenant
+			values[i+1] = b
+			values[i+2] = rec.hash
+			values[i+3] = time.Now().Unix()
+			values[i+4] = time.Now().Unix()
+			i += 5
+			//values = append(values, rec.tenant, string(b), rec.hash, time.Now().Unix(), time.Now().Unix())
 		}
 
 		start := time.Now()
 		err := postgres.BulkUpsert(context.Background(), pw.db, "tenant_labelset", []string{"tenant", "labels", "cardinality", "created_at", "updated_at"}, values, []string{"tenant", "cardinality"}, []string{"tenant", "cardinality", "labels", "created_at"})
 		if err != nil {
+			fmt.Println(err)
 			continue
 		}
-		log.Println("took:", time.Since(start))
+		values = nil
+		log.Println("pg took:", time.Since(start))
 	}
 	pw.doneCh <- struct{}{}
 }
 
 func (mw *MongoWorker) Do(id int) {
-	fmt.Println("starting mongo worker: %v", id)
-	for t := range mw.workCh {
+	fmt.Println("starting mongo worker: ", id)
+	for t := range mw.mongoWorkCh {
+		fmt.Println("mongo ", t)
 		mw.mu.RLock()
-		defer mw.mu.RUnlock()
 		s, ok := mw.work[t]
 		if !ok {
+			mw.mu.RUnlock()
 			continue
 		}
+		mw.mu.RUnlock()
 
-		var models []mongo.WriteModel
-
-		for _, series := range s {
-			var rec LabelRecord
-			tenant, ok := series["__tenant__"]
-			if !ok {
-				continue
+		//var models []mongo.WriteModel
+		offset := 10000
+		total := len(s)
+		start1 := time.Now()
+		for left := 0; left < total; left += offset {
+			right := left + offset
+			if right > total {
+				right = total
 			}
-			for k, v := range series {
-				rec.labels = append(rec.labels, Label{
-					Name:  k,
-					Value: v,
-				})
+			models := make([]mongo.WriteModel, right-left)
+			for i, series := range s[left:right] {
+				var rec LabelRecord
+				_, ok := series["__tenant__"]
+				if !ok {
+					continue
+				}
+
+				bs := make(bson.M)
+				for k, v := range series {
+					rec.labels = append(rec.labels, Label{
+						Name:  k,
+						Value: v,
+					})
+					if k == "__tenant__" || k == "__l9lake__" {
+						continue
+					}
+					bs[k] = v
+				}
+				rec.tenant = t
+				rec.hash = CardinalityHash(rec.labels)
+
+				mval := bson.D{
+					{"$set", bson.D{
+						{"updated_at", time.Now()},
+					}},
+					{"$setOnInsert", bson.D{
+						{"_id", rec.hash},
+						{"created_at", time.Now()},
+						{"labels", bs},
+					}},
+				}
+				models[i] = mongo.NewUpdateOneModel().SetFilter(bson.D{{"_id", rec.hash}}).
+					SetUpdate(mval).SetUpsert(true)
+				// models = append(models, mongo.NewUpdateOneModel().SetFilter(bson.D{{"_id", rec.hash}}).
+				// 	SetUpdate(mval).SetUpsert(true))
 			}
-			rec.tenant = tenant
-			rec.hash = CardinalityHash(rec.labels)
-			delete(series, "__tenant__")
-			delete(series, "le")
-			delete(series, "__l9lake__")
 
-			bs := make(bson.M)
-
-			for k, v := range series {
-				bs[k] = v
-			}
-
-			mval := bson.D{
-				{"$set", bson.D{
-					{"updated_at", time.Now()},
-				}},
-				{"$setOnInsert", bson.D{
-					{"_id", rec.hash},
-					{"created_at", time.Now()},
-					{"labels", bs},
-				}},
-			}
-			models = append(models, mongo.NewUpdateOneModel().SetFilter(bson.D{{"_id", rec.hash}}).
-				SetUpdate(mval).SetUpsert(true))
-
-			start1 := time.Now()
-			err := mongo_ops.BulkUpsert(mw.db, "last9", models)
+			err := mongo_ops.BulkUpsert(mw.db, t, models)
 			if err != nil {
+				fmt.Println(err)
 				continue
 			}
-			log.Println("took:", time.Since(start1))
+			models = nil
 		}
+		log.Println("mongo took:", time.Since(start1))
 	}
 	mw.doneCh <- struct{}{}
 }
