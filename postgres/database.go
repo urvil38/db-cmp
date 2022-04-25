@@ -14,7 +14,7 @@ import (
 
 const uniqueViolation = "23505"
 
-var batchSize = 800000
+var batchSize = 50000
 
 // Set of error variables for CRUD operations.
 var (
@@ -98,13 +98,9 @@ func bulkInsert(ctx context.Context, db *sql.DB, table string, columns, returnin
 	if remainder := len(values) % len(columns); remainder != 0 {
 		return fmt.Errorf("modulus of len(values) and len(columns) must be 0: got %d", remainder)
 	}
-	// Postgres supports up to 65535 parameters, but stop well before that
-	// so we don't construct humongous queries.
 	const maxParameters = 1000
 	stride := (maxParameters / len(columns)) * len(columns)
 	if stride == 0 {
-		// This is a pathological case (len(columns) > maxParameters), but we
-		// handle it cautiously.
 		return fmt.Errorf("too many columns to insert: %d", len(columns))
 	}
 
