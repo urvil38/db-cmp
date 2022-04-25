@@ -258,7 +258,6 @@ func (mw *MongoWorker) Do(id int) {
 		}
 		mw.mu.RUnlock()
 
-		//var models []mongo.WriteModel
 		offset := 50000
 		total := len(s)
 		var wg sync.WaitGroup
@@ -271,8 +270,8 @@ func (mw *MongoWorker) Do(id int) {
 			wg.Add(1)
 			go func(left, right int) {
 				defer wg.Done()
-				models := make([]mongo.WriteModel, right-left)
-				for i, series := range s[left:right] {
+				var models[]mongo.WriteModel
+				for _, series := range s[left:right] {
 					var rec LabelRecord
 					_, ok := series["__tenant__"]
 					if !ok {
@@ -303,10 +302,9 @@ func (mw *MongoWorker) Do(id int) {
 							{"labels", bs},
 						}},
 					}
-					models[i] = mongo.NewUpdateOneModel().SetFilter(bson.D{{"_id", rec.hash}}).
-						SetUpdate(mval).SetUpsert(true)
-					// models = append(models, mongo.NewUpdateOneModel().SetFilter(bson.D{{"_id", rec.hash}}).
-					// 	SetUpdate(mval).SetUpsert(true))
+					
+					models = append(models, mongo.NewUpdateOneModel().SetFilter(bson.D{{"_id", rec.hash}}).
+					SetUpdate(mval).SetUpsert(true))
 				}
 
 				err := mongo_ops.BulkUpsert(mw.db, t, models)
